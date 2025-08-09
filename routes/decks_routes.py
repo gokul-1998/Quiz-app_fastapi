@@ -36,7 +36,6 @@ class DeckUpdate(BaseModel):
 class CardBase(BaseModel):
     question: str
     answer: str
-    visibility: Literal["public", "private"] = "private"
 
 
 class CardCreateMCQ(CardBase):
@@ -108,7 +107,6 @@ class CardOut(BaseModel):
     answer: str
     qtype: Literal["mcq", "match", "fillups"]
     options: Optional[List[str]] = None
-    visibility: Literal["public", "private"]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -117,7 +115,6 @@ class CardUpdate(BaseModel):
     """Partial update for a card. If qtype changes to 'mcq', options must be provided."""
     question: Optional[str] = None
     answer: Optional[str] = None
-    visibility: Optional[Literal["public", "private"]] = None
     qtype: Optional[Literal["mcq", "fillups", "match"]] = None
     options: Optional[List[str]] = None
 
@@ -198,16 +195,27 @@ def list_decks(
     size = max(1, min(size, 100))
     offset = (page - 1) * size
 
-    # Add card count and order by recent, then paginate
-    query = query.outerjoin(Deck.cards).group_by(Deck.id).order_by(Deck.id.desc()).offset(offset).limit(size)
+    # Order and paginate (no outerjoin/group_by here to keep counting simple)
+    query = query.order_by(Deck.id.desc()).offset(offset).limit(size)
     decks = query.all()
 
-    # Favourite flags for current user
+    # Favourite flags and card counts for current user
     deck_ids = [d.id for d in decks]
     fav_rows = []
     if deck_ids:
         fav_rows = db.query(DeckFavorite.deck_id).filter(DeckFavorite.user_id == current_user.id, DeckFavorite.deck_id.in_(deck_ids)).all()
     fav_ids = {row[0] for row in fav_rows}
+
+    # Card counts per deck
+    counts = {}
+    if deck_ids:
+        count_rows = (
+            db.query(Card.deck_id, func.count(Card.id))
+            .filter(Card.deck_id.in_(deck_ids))
+            .group_by(Card.deck_id)
+            .all()
+        )
+        counts = {deck_id: count for deck_id, count in count_rows}
 
     # Set pagination headers
     if response is not None:
@@ -230,7 +238,7 @@ def list_decks(
                 visibility=d.visibility,
                 owner_id=d.owner_id,
                 created_at=d.created_at,
-                card_count=None,
+                card_count=counts.get(d.id, 0),
                 favourite=d.id in fav_ids,
             )
         )
@@ -312,7 +320,7 @@ def add_card(deck_id: int, payload: CardCreate, db: Session = Depends(get_db), c
         answer=payload.answer,
         qtype=str(payload.qtype),
         options_json=options_json,
-        visibility=payload.visibility,
+        visibility=deck.visibility,  # cards inherit deck visibility
     )
     db.add(card)
     db.commit()
@@ -324,7 +332,6 @@ def add_card(deck_id: int, payload: CardCreate, db: Session = Depends(get_db), c
         answer=card.answer,
         qtype=card.qtype,  # already a string literal value
         options=json.loads(card.options_json) if card.options_json else None,
-        visibility=card.visibility,
     )
 
 
@@ -337,11 +344,8 @@ def list_cards(deck_id: int, db: Session = Depends(get_db), current_user=Depends
     is_owner = deck.owner_id == current_user.id
     if not is_owner and deck.visibility != "public":
         raise HTTPException(status_code=403, detail="Deck is private")
-    # If the current user owns the deck, show all cards. Otherwise, show only public cards.
-    if is_owner:
-        cards = db.query(Card).filter(Card.deck_id == deck.id).all()
-    else:
-        cards = db.query(Card).filter(Card.deck_id == deck.id, Card.visibility == "public").all()
+    # If the deck is public or owner, show cards; otherwise it's already forbidden
+    cards = db.query(Card).filter(Card.deck_id == deck.id).all()
     out: List[CardOut] = []
     for c in cards:
         out.append(
@@ -351,7 +355,6 @@ def list_cards(deck_id: int, db: Session = Depends(get_db), current_user=Depends
                 answer=c.answer,
                 qtype=c.qtype,
                 options=json.loads(c.options_json) if c.options_json else None,
-                visibility=c.visibility,
             )
         )
     return out
@@ -366,17 +369,14 @@ def get_card(deck_id: int, card_id: int, db: Session = Depends(get_db), current_
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
     is_owner = deck.owner_id == current_user.id
-    if not is_owner:
-        # Non-owners can only view if deck is public and card is public
-        if deck.visibility != "public" or card.visibility != "public":
-            raise HTTPException(status_code=403, detail="Not authorized to view this card")
+    if not is_owner and deck.visibility != "public":
+        raise HTTPException(status_code=403, detail="Not authorized to view this card")
     return CardOut(
         id=card.id,
         question=card.question,
         answer=card.answer,
         qtype=card.qtype,
         options=json.loads(card.options_json) if card.options_json else None,
-        visibility=card.visibility,
     )
 
 
@@ -415,7 +415,7 @@ def update_card(
         card.options_json = None
 
     # Update simple fields
-    for field in ["question", "answer", "visibility", "qtype"]:
+    for field in ["question", "answer", "qtype"]:
         if field in data:
             setattr(card, field, data[field])
 
