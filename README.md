@@ -1,3 +1,17 @@
+# Running the program use 
+- for UV
+```
+uv init
+uv pip install -r requirements.txt
+uv run uvicorn main:app --reload
+```
+- without uv
+```
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+
 # fastapi_app
 
 - user can create a deck, and add question and answer to it
