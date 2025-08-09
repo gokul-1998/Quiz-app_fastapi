@@ -2,8 +2,25 @@
 name = "fastapi-app"
 version = "0.1.0"
 description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "sqlalchemy>=2.0.42",
+authors = [
+    { name = "Sriram Murugesan", email = "srirammurugesan@gmail.com" }
 ]
+readme = "README.md"
+requires-python = ">= 3.12"
+
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+    "python-dotenv",
+    "passlib[bcrypt]",
+    "python-jose[cryptography]",
+    "pytest",
+    "pytest-cov",
+    "httpx",
+    "python-multipart",
+    "locust",
+]
+
+[tool.coverage.run]
+omit = ["locustfile.py"]

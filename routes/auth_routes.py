@@ -12,15 +12,25 @@ from auth import (
 )
 from db import get_db, User
 
-router = APIRouter(prefix="/auth", tags=["auth"])
 
-# OAuth2 scheme for Swagger "Authorize" button
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-
-
-class UserRegister(BaseModel):
+class UserCreate(BaseModel):
     email: str
     password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str
+
+
+class TokenRefresh(BaseModel):
+    refresh_token: str
+
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 def get_current_user(
@@ -37,7 +47,7 @@ def get_current_user(
 
 
 @router.post("/register")
-def register(user: UserRegister, db: Session = Depends(get_db)):
+def register(user: UserCreate, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.email == user.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
@@ -46,10 +56,11 @@ def register(user: UserRegister, db: Session = Depends(get_db)):
     new_user = User(email=user.email, hashed_password=hashed_pw)
     db.add(new_user)
     db.commit()
+    db.refresh(new_user)
     return {"message": "User registered successfully"}
 
 
-@router.post("/login")
+@router.post("/login", response_model=Token)
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
@@ -64,8 +75,8 @@ def login(
 
     access_token = create_access_token({"sub": user.email, "type": "access"})
     refresh_token = create_refresh_token({"sub": user.email, "type": "refresh"})
-
     user.refresh_token = refresh_token
+    db.merge(user)
     db.commit()
 
     return {
@@ -77,10 +88,11 @@ def login(
 
 @router.post("/refresh")
 def refresh(
-    refresh_token: str,
+    token_data: TokenRefresh,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    refresh_token = token_data.refresh_token
     payload = decode_token(refresh_token)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
@@ -89,4 +101,4 @@ def refresh(
         raise HTTPException(status_code=401, detail="Refresh token mismatch")
 
     new_access = create_access_token({"sub": current_user.email, "type": "access"})
-    return {"access_token": new_access}
+    return {"access_token": new_access, "token_type": "bearer", "refresh_token": refresh_token}
