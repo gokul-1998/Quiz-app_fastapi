@@ -1,0 +1,7 @@
+fastapi
+pydantic
+uvicorn
+python-jose
+passlib[bcrypt]
+supabase
+python-dotenv
