@@ -30,6 +30,7 @@ class DeckUpdate(BaseModel):
 class CardBase(BaseModel):
     question: str
     answer: str
+    visibility: Literal["public", "private"] = "private"
 
 
 class CardCreateMCQ(CardBase):
@@ -101,6 +102,7 @@ class CardOut(BaseModel):
     answer: str
     qtype: Literal["mcq", "match", "fillups"]
     options: Optional[List[str]] = None
+    visibility: Literal["public", "private"]
 
     class Config:
         from_attributes = True
@@ -176,6 +178,7 @@ def add_card(deck_id: int, payload: CardCreate, db: Session = Depends(get_db), c
         answer=payload.answer,
         qtype=str(payload.qtype),
         options_json=options_json,
+        visibility=payload.visibility,
     )
     db.add(card)
     db.commit()
@@ -187,6 +190,7 @@ def add_card(deck_id: int, payload: CardCreate, db: Session = Depends(get_db), c
         answer=card.answer,
         qtype=card.qtype,  # already a string literal value
         options=json.loads(card.options_json) if card.options_json else None,
+        visibility=card.visibility,
     )
 
 
@@ -195,7 +199,11 @@ def list_cards(deck_id: int, db: Session = Depends(get_db), current_user=Depends
     deck = db.query(Deck).filter(Deck.id == deck_id, Deck.owner_id == current_user.id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
-    cards = db.query(Card).filter(Card.deck_id == deck.id).all()
+    # If the current user owns the deck, show all cards. Otherwise, show only public cards.
+    if deck.owner_id == current_user.id:
+        cards = db.query(Card).filter(Card.deck_id == deck.id).all()
+    else:
+        cards = db.query(Card).filter(Card.deck_id == deck.id, Card.visibility == "public").all()
     out: List[CardOut] = []
     for c in cards:
         out.append(
@@ -205,6 +213,7 @@ def list_cards(deck_id: int, db: Session = Depends(get_db), current_user=Depends
                 answer=c.answer,
                 qtype=c.qtype,
                 options=json.loads(c.options_json) if c.options_json else None,
+                visibility=c.visibility,
             )
         )
     return out

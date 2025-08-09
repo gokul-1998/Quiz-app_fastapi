@@ -34,6 +34,7 @@ class Card(Base):
     __tablename__ = "cards"
     __table_args__ = (
         CheckConstraint("qtype in ('mcq','match','fillups')", name="ck_cards_qtype"),
+        CheckConstraint("visibility in ('public','private')", name="ck_cards_visibility"),
     )
     id = Column(Integer, primary_key=True, index=True)
     deck_id = Column(Integer, ForeignKey("decks.id"), nullable=False, index=True)
@@ -41,6 +42,7 @@ class Card(Base):
     answer = Column(Text, nullable=False)
     qtype = Column(String, nullable=False)  # mcq | match | fillups
     options_json = Column(Text, nullable=True)  # stores MCQ options as JSON array string
+    visibility = Column(String, nullable=False, default="private")  # public | private
 
     deck = relationship("Deck", back_populates="cards")
 
