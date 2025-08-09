@@ -101,7 +101,6 @@ def test_refresh_token_mismatch(client):
         json={"refresh_token": mismatched_refresh_token},
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    import pdb; pdb.set_trace()
     assert response.status_code == 401
     assert response.json() == {"detail": "Refresh token mismatch"}
 
