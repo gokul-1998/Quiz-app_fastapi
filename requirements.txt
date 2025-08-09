@@ -1,7 +1,10 @@
 fastapi
-pydantic
-uvicorn
-python-jose
-passlib[bcrypt]
-supabase
 python-dotenv
+SQLAlchemy
+passlib[bcrypt]
+python-jose[cryptography]
+pytest
+httpx
+python-multipart
+locust
+uvicorn
