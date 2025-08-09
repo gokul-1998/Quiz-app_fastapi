@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 try:
     # Pydantic v2
     from pydantic import ConfigDict
-except ImportError:  # fallback for v1 if present
+except ImportError:  # pragma: no cover
     ConfigDict = None  # type: ignore
 from pydantic import field_validator
 from sqlalchemy.orm import Session
@@ -102,8 +102,7 @@ class CardOut(BaseModel):
     qtype: Literal["mcq", "match", "fillups"]
     options: Optional[List[str]] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DeckOut(BaseModel):
@@ -111,8 +110,7 @@ class DeckOut(BaseModel):
     title: str
     description: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ----- Deck CRUD -----

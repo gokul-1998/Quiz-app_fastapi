@@ -42,6 +42,70 @@ def test_login_for_access_token(client):
     assert response.json() == {"detail": "Invalid email or password"}
 
 
+def test_get_current_user_invalid_token_type(client):
+    # Register and login to get a refresh token
+    client.post(
+        "/auth/register",
+        json={"email": "invalidtype@example.com", "password": "testpassword"},
+    )
+    login_response = client.post(
+        "/auth/login",
+        data={"username": "invalidtype@example.com", "password": "testpassword"},
+    )
+    refresh_token = login_response.json()["refresh_token"]
+
+    # Try to use the refresh token as an access token
+    response = client.post(
+        "/auth/refresh",
+        params={"refresh_token": refresh_token},
+        headers={"Authorization": f"Bearer {refresh_token}"},
+    )
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid access token"}
+
+
+def test_get_current_user_user_not_found(client):
+    # Create a token for a user that doesn't exist
+    from auth import create_access_token
+    non_existent_user_token = create_access_token({"sub": "nouser@example.com", "type": "access"})
+
+    response = client.post(
+        "/auth/refresh",
+        params={"refresh_token": "anytoken"},
+        headers={"Authorization": f"Bearer {non_existent_user_token}"},
+    )
+    assert response.status_code == 401
+    assert response.json() == {"detail": "User not found"}
+
+
+def test_refresh_token_mismatch(client):
+    # Register and login
+    client.post(
+        "/auth/register",
+        json={"email": "mismatch@example.com", "password": "testpassword"},
+    )
+    login_response = client.post(
+        "/auth/login",
+        data={"username": "mismatch@example.com", "password": "testpassword"},
+    )
+    tokens = login_response.json()
+    access_token = tokens["access_token"]
+
+    # Create a second, valid, but different refresh token
+    from auth import create_refresh_token
+    mismatched_refresh_token = create_refresh_token({"sub": "mismatch@example.com", "type": "refresh"})
+
+    # Try to use the mismatched refresh token
+    response = client.post(
+        "/auth/refresh",
+        json={"refresh_token": mismatched_refresh_token},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    import pdb; pdb.set_trace()
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Refresh token mismatch"}
+
+
 def test_refresh_token(client):
     # Register and login to get tokens
     client.post(
@@ -59,7 +123,7 @@ def test_refresh_token(client):
     # Use the refresh token to get a new access token
     response = client.post(
         "/auth/refresh",
-        params={"refresh_token": refresh_token},
+        json={"refresh_token": refresh_token},
         headers={"Authorization": f"Bearer {access_token}"},
     )
     assert response.status_code == 200
@@ -68,7 +132,7 @@ def test_refresh_token(client):
     # Test with invalid refresh token
     response = client.post(
         "/auth/refresh",
-        params={"refresh_token": "invalidtoken"},
+        json={"refresh_token": "invalidtoken"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
     assert response.status_code == 401

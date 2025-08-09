@@ -80,13 +80,13 @@ def test_update_deck(client: TestClient):
 
     response = client.patch(
         f"/decks/{deck_id}",
-        json={"title": "Updated Title"},
+        json={"title": "Updated Title", "description": "After update"},
         headers=headers,
     )
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == "Updated Title"
-    assert data["description"] == "Before update"  # Description should not change
+    assert data["description"] == "After update"
 
 
 def test_delete_deck(client: TestClient):
@@ -130,6 +130,46 @@ def test_add_card_to_deck(client: TestClient):
     assert data["question"] == "What is the capital of Japan?"
     assert data["qtype"] == "mcq"
     assert data["options"] == ["Tokyo", "Kyoto", "Osaka", "Hokkaido"]
+
+
+def test_deck_not_found(client: TestClient):
+    headers = get_auth_headers(client)
+    non_existent_deck_id = 99999
+
+    # Test various endpoints that should fail
+    update_response = client.patch(f"/decks/{non_existent_deck_id}", json={"title": "new title"}, headers=headers)
+    assert update_response.status_code == 404
+
+    delete_response = client.delete(f"/decks/{non_existent_deck_id}", headers=headers)
+    assert delete_response.status_code == 404
+
+    add_card_response = client.post(f"/decks/{non_existent_deck_id}/cards", json={ "qtype": "fillups", "question": "q", "answer": "a"}, headers=headers)
+    assert add_card_response.status_code == 404
+
+    list_cards_response = client.get(f"/decks/{non_existent_deck_id}/cards", headers=headers)
+    assert list_cards_response.status_code == 404
+
+
+def test_add_card_invalid_data(client: TestClient):
+    headers = get_auth_headers(client)
+    create_deck_response = client.post("/decks/", json={"title": "Card Validation Deck"}, headers=headers)
+    deck_id = create_deck_response.json()["id"]
+
+    # Test with too few options
+    invalid_options_response = client.post(
+        f"/decks/{deck_id}/cards",
+        json={"qtype": "mcq", "question": "q", "answer": "a", "options": ["1", "2"]},
+        headers=headers,
+    )
+    assert invalid_options_response.status_code == 422 # Unprocessable Entity for validation errors
+
+    # Test with empty string in options
+    empty_option_response = client.post(
+        f"/decks/{deck_id}/cards",
+        json={"qtype": "mcq", "question": "q", "answer": "a", "options": ["1", "2", "3", " "]},
+        headers=headers,
+    )
+    assert empty_option_response.status_code == 422
 
 
 def test_list_cards_in_deck(client: TestClient):

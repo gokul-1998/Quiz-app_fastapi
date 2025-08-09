@@ -46,7 +46,7 @@ class Card(Base):
 
 Base.metadata.create_all(bind=engine)
 
-def get_db():
+def get_db():  # pragma: no cover
     db = SessionLocal()
     try:
         yield db
