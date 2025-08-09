@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, CheckConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, CheckConstraint, UniqueConstraint, DateTime, func
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from dotenv import load_dotenv
@@ -22,9 +22,15 @@ class User(Base):
 
 class Deck(Base):
     __tablename__ = "decks"
+    __table_args__ = (
+        CheckConstraint("visibility in ('public','private')", name="ck_decks_visibility"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    tags = Column(String, nullable=True)  # Comma-separated tags, e.g. "python,programming"
+    visibility = Column(String, nullable=False, default="private")  # public | private
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
     owner = relationship("User", back_populates="decks")
@@ -45,6 +51,16 @@ class Card(Base):
     visibility = Column(String, nullable=False, default="private")  # public | private
 
     deck = relationship("Deck", back_populates="cards")
+
+
+class DeckFavorite(Base):
+    __tablename__ = "deck_favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "deck_id", name="uq_fav_user_deck"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    deck_id = Column(Integer, ForeignKey("decks.id"), nullable=False, index=True)
 
 Base.metadata.create_all(bind=engine)
 

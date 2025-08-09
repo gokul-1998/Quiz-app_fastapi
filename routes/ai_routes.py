@@ -3,8 +3,17 @@ from pydantic import BaseModel, Field
 from typing import Literal
 import os
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from routes.decks_routes import CardCreateMCQ, CardCreateFillups, CardCreateMatch
+
+class AIQuestion(BaseModel):
+    question: str
+    answer: str
+    qtype: Literal["mcq", "fillups", "match"]
+    options: list[str] | None = None
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -16,28 +25,87 @@ genai.configure(api_key=API_KEY)
 class AIGenerateRequest(BaseModel):
     prompt: str = Field(..., example="Explain photosynthesis")
     desired_qtype: Literal["mcq", "fillups", "match"] = Field(..., example="mcq")
-    visibility: Literal["public", "private"] = "private"
 
-@router.post("/generate-card", response_model=CardCreateMCQ | CardCreateFillups | CardCreateMatch)
+
+def _generate_with_gemini(prompt: str, qtype: str) -> tuple[str, str, list[str] | None]:
+    """Generate question, answer, and options (if MCQ) using Gemini 2.0 Flash."""
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    if qtype == "mcq":
+        prompt_text = f"""Generate an educational multiple-choice question with 4 options about: {prompt}
+        
+        Format your response as a JSON object with these exact keys:
+        {{
+            "question": "The question text",
+            "answer": "The correct answer (must match one of the options exactly)",
+            "options": ["Option 1", "Option 2 (correct)", "Option 3", "Option 4"]
+        }}"""
+    elif qtype == "fillups":
+        prompt_text = f"""Generate a fill-in-the-blank question about: {prompt}
+        
+        Format your response as a JSON object with these exact keys:
+        {{
+            "question": "The question with a blank like ____",
+            "answer": "The exact text that fills the blank",
+            "options": null
+        }}"""
+    else:  # match
+        prompt_text = f"""Generate a matching question (pairs to match) about: {prompt}
+        
+        Format your response as a JSON object with these exact keys:
+        {{
+            "question": "The matching prompt (e.g., 'Match the following terms to their definitions')",
+            "answer": "The correct matching (e.g., 'A-1, B-3, C-2')",
+            "options": null
+        }}"""
+
+    try:
+        response = model.generate_content(prompt_text)
+        import json, re
+        raw = response.text.strip()
+        # Attempt to extract first JSON block if model wraps it in markdown
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if match:
+            raw_json = match.group(0)
+        else:
+            raw_json = raw
+        try:
+            result = json.loads(raw_json)
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Gemini did not return valid JSON: {raw[:200]}"
+            )
+        return result["question"], result["answer"], result.get("options")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate content: {str(e)}"
+        )
+
+@router.post("/generate-card", response_model=AIQuestion)
 async def generate_card(req: AIGenerateRequest):
-    # Call Gemini AI to generate question/answer/options
-    # For demo, mock response here
-
-    # TODO: Replace with actual Gemini API call
-    if req.desired_qtype == "mcq":
-        # Generate MCQ with 4 options
-        question = f"What is the answer to: {req.prompt}?"
-        answer = "Answer"
-        options = ["Answer", "Option1", "Option2", "Option3"]
-        return CardCreateMCQ(question=question, answer=answer, qtype="mcq", options=options, visibility=req.visibility)
-    elif req.desired_qtype == "fillups":
-        question = f"Fill in the blank: {req.prompt}"
-        answer = "Answer"
-        return CardCreateFillups(question=question, answer=answer, qtype="fillups", visibility=req.visibility)
-    else:
-        question = f"Match the following: {req.prompt}"
-        answer = "Answer"
-        return CardCreateMatch(question=question, answer=answer, qtype="match", visibility=req.visibility)
+    """Generate a flashcard using Gemini AI based on the given prompt and question type."""
+    try:
+        question, answer, options = _generate_with_gemini(req.prompt, req.desired_qtype)
+        
+        if req.desired_qtype == "mcq":
+            if not options or len(options) < 4:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to generate enough options for MCQ"
+                )
+            return AIQuestion(question=question, answer=answer, qtype="mcq", options=options)
+        elif req.desired_qtype == "fillups":
+            return AIQuestion(question=question, answer=answer, qtype="fillups")
+        else:  # match
+            return AIQuestion(question=question, answer=answer, qtype="match")
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating card: {str(e)}"
+        )
 
 
 # Summary:
