@@ -359,9 +359,12 @@ def delete_deck(deck_id: int, db: Session = Depends(get_db), current_user=Depend
 # ----- Cards within a deck -----
 @router.post("/{deck_id}/cards", response_model=CardOut, status_code=status.HTTP_201_CREATED)
 def add_card(deck_id: int, payload: CardCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    deck = db.query(Deck).filter(Deck.id == deck_id, Deck.owner_id == current_user.id).first()
+    # Only the deck owner can add cards
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
+    if deck.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to add cards to this deck")
     # persist options for MCQ as JSON
     options_json = json.dumps(payload.options) if isinstance(payload, CardCreateMCQ) else None
     card = Card(

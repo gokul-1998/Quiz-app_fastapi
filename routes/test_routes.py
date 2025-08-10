@@ -248,7 +248,7 @@ def get_random_public_deck(
         "title": deck.title,
         "description": deck.description,
         "tags": deck.tags,
-        "owner": deck_owner.username,
+        "owner": deck_owner.email,
         "card_count": card_count,
         "created_at": deck.created_at
     }
