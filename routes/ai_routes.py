@@ -17,11 +17,6 @@ class AIQuestion(BaseModel):
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise RuntimeError("GOOGLE_API_KEY environment variable not set")
-genai.configure(api_key=API_KEY)
-
 class AIGenerateRequest(BaseModel):
     prompt: str = Field(..., example="Explain photosynthesis")
     desired_qtype: Literal["mcq", "fillups", "match"] = Field(..., example="mcq")
@@ -29,6 +24,11 @@ class AIGenerateRequest(BaseModel):
 
 def _generate_with_gemini(prompt: str, qtype: str) -> tuple[str, str, list[str] | None]:
     """Generate question, answer, and options (if MCQ) using Gemini 2.0 Flash."""
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        # Runtime guard to make function testable without import-time failure
+        raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not set")
+    genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-2.0-flash')
     
     if qtype == "mcq":

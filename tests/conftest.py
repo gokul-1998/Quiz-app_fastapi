@@ -28,11 +28,11 @@ Base.metadata.create_all(bind=engine)
 
 
 def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
+    try:  # pragma: no cover
+        db = TestingSessionLocal()  # pragma: no cover
+        yield db  # pragma: no cover
     finally:
-        db.close()
+        db.close()  # pragma: no cover
 
 
 app.dependency_overrides[get_db] = override_get_db

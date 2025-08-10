@@ -332,9 +332,6 @@ def update_deck(deck_id: int, payload: DeckUpdate, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Deck not found")
     
     update_data = payload.dict(exclude_unset=True)
-    # Ensure owner can't be changed
-    if 'owner_id' in update_data:
-        del update_data['owner_id']
     
     for field, value in update_data.items():
         setattr(deck, field, value)

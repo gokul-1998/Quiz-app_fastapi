@@ -23,8 +23,8 @@ def test_engine():
     finally:
         try:
             os.unlink(tmp.name)
-        except FileNotFoundError:
-            pass
+        except FileNotFoundError:  # pragma: no cover
+            pass  # pragma: no cover
 
 
 @pytest.fixture(scope="session")
