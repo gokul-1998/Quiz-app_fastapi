@@ -318,9 +318,14 @@ def unfavorite_deck(deck_id: int, db: Session = Depends(get_db), current_user=De
 
 @router.get("/{deck_id}", response_model=DeckOut)
 def get_deck(deck_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    deck = db.query(Deck).filter(Deck.id == deck_id, Deck.owner_id == current_user.id).first()
+    # Fetch by id first
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
+    # Allow access if owner or deck is public
+    is_owner = deck.owner_id == current_user.id
+    if not is_owner and deck.visibility != "public":
+        raise HTTPException(status_code=403, detail="Deck is private")
     return deck
 
 

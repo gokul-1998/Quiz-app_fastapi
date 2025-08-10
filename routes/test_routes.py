@@ -110,7 +110,7 @@ def start_test_session(
         "session_id": session_id,
         "deck_id": payload.deck_id,
         "deck_title": deck.title,
-        "deck_owner": db.query(User).filter(User.id == deck.owner_id).first().username,
+        "deck_owner": db.query(User).filter(User.id == deck.owner_id).first().email,
         "total_cards": len(cards),
         "cards": test_cards,
         "started_at": datetime.now().isoformat(),
@@ -176,7 +176,7 @@ def complete_test_session(
     return TestSessionResult(
         session_id=session_id,
         deck_title=deck.title,
-        deck_owner=deck_owner.username,
+        deck_owner=deck_owner.email,
         total_cards=total_cards,
         correct_answers=correct_answers,
         accuracy=round(accuracy, 2),

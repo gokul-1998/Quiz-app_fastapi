@@ -50,7 +50,7 @@ def get_dashboard(
             Deck.title,
             Deck.description,
             Deck.tags,
-            User.username.label("owner_username"),
+            User.email.label("owner_username"),
             func.count(Card.id).label("card_count"),
             func.count(DeckLike.id).label("like_count"),
             Deck.created_at
@@ -59,7 +59,7 @@ def get_dashboard(
         .outerjoin(Card, Deck.id == Card.deck_id)
         .outerjoin(DeckLike, Deck.id == DeckLike.deck_id)
         .filter(Deck.visibility == "public")
-        .group_by(Deck.id, User.username)
+        .group_by(Deck.id, User.email)
         .order_by(desc("like_count"), desc(Deck.created_at))
         .limit(10)
         .all()
@@ -103,7 +103,7 @@ def get_dashboard(
     
     # Get recent activity (recent public decks created)
     recent_decks = (
-        db.query(Deck, User.username)
+        db.query(Deck, User.email)
         .join(User, Deck.owner_id == User.id)
         .filter(Deck.visibility == "public")
         .order_by(desc(Deck.created_at))
@@ -132,7 +132,7 @@ def get_dashboard(
         ),
         "recent_activities": recent_activities,
         "user_info": {
-            "username": current_user.username,
+            "username": current_user.email,
             "user_id": current_user.id
         }
     }
@@ -154,7 +154,7 @@ def discover_decks(
             Deck.title,
             Deck.description,
             Deck.tags,
-            User.username.label("owner_username"),
+            User.email.label("owner_username"),
             func.count(Card.id).label("card_count"),
             Deck.created_at
         )
@@ -162,7 +162,7 @@ def discover_decks(
         .outerjoin(Card, Deck.id == Card.deck_id)
         .filter(Deck.visibility == "public")
         .filter(Deck.owner_id != current_user.id)  # Exclude user's own decks
-        .group_by(Deck.id, User.username)
+        .group_by(Deck.id, User.email)
         .having(func.count(Card.id) >= min_cards)
     )
     
@@ -230,14 +230,14 @@ def get_quick_test_options(
             Deck.title,
             Deck.description,
             Deck.tags,
-            User.username.label("owner_username"),
+            User.email.label("owner_username"),
             func.count(Card.id).label("card_count")
         )
         .join(User, Deck.owner_id == User.id)
         .join(Card, Deck.id == Card.deck_id)
         .filter(Deck.visibility == "public")
         .filter(Deck.owner_id != current_user.id)
-        .group_by(Deck.id, User.username)
+        .group_by(Deck.id, User.email)
         .having(func.count(Card.id) >= 5)
         .order_by(func.random())
         .limit(5)
