@@ -10,7 +10,7 @@ from pydantic import field_validator
 from sqlalchemy.orm import Session
 import json
 from datetime import datetime
-from db import get_db, Deck, Card, DeckFavorite
+from db import get_db, Deck, Card, DeckFavorite, DeckLike
 from sqlalchemy import func
 from routes.auth_routes import get_current_user
 
@@ -125,6 +125,8 @@ class DeckOut(DeckBase):
     created_at: datetime
     card_count: int | None = None  # Will be populated in list_decks
     favourite: bool = False  # Per-user flag
+    like_count: int = 0  # Total likes
+    liked: bool = False   # Whether current user liked
 
     class Config:
         orm_mode = True
@@ -159,6 +161,7 @@ def list_decks(
     current_user=Depends(get_current_user)
 ):
     """List decks with optional search, tag filtering, and visibility controls."""
+    # Base deck query
     query = db.query(Deck)
     
     # Show own decks and public decks (no admin override)
@@ -186,7 +189,14 @@ def list_decks(
     if visibility in ["public", "private"]:
         query = query.filter(Deck.visibility == visibility)
     
-    # Get total count using a subquery to preserve filters
+    # Like counts subquery for ordering and counts
+    like_counts_subq = (
+        db.query(DeckLike.deck_id.label("deck_id"), func.count(DeckLike.id).label("like_count"))
+        .group_by(DeckLike.deck_id)
+        .subquery()
+    )
+
+    # Total count using current filters
     count_subq = query.with_entities(Deck.id).subquery()
     total = db.query(func.count()).select_from(count_subq).scalar() or 0
 
@@ -195,16 +205,29 @@ def list_decks(
     size = max(1, min(size, 100))
     offset = (page - 1) * size
 
-    # Order and paginate (no outerjoin/group_by here to keep counting simple)
-    query = query.order_by(Deck.id.desc()).offset(offset).limit(size)
-    decks = query.all()
+    # Order by like_count desc then id desc, then paginate
+    query = (
+        query.outerjoin(like_counts_subq, Deck.id == like_counts_subq.c.deck_id)
+        .add_columns(func.coalesce(like_counts_subq.c.like_count, 0).label("like_count"))
+        .order_by(func.coalesce(like_counts_subq.c.like_count, 0).desc(), Deck.id.desc())
+        .offset(offset)
+        .limit(size)
+    )
+    rows = query.all()
+    decks = [row[0] for row in rows]
+    like_counts_map = {row[0].id: row[1] for row in rows}
 
-    # Favourite flags and card counts for current user
+    # Favourite/Like flags and card counts for current user
     deck_ids = [d.id for d in decks]
     fav_rows = []
     if deck_ids:
         fav_rows = db.query(DeckFavorite.deck_id).filter(DeckFavorite.user_id == current_user.id, DeckFavorite.deck_id.in_(deck_ids)).all()
     fav_ids = {row[0] for row in fav_rows}
+
+    liked_rows = []
+    if deck_ids:
+        liked_rows = db.query(DeckLike.deck_id).filter(DeckLike.user_id == current_user.id, DeckLike.deck_id.in_(deck_ids)).all()
+    liked_ids = {row[0] for row in liked_rows}
 
     # Card counts per deck
     counts = {}
@@ -225,7 +248,7 @@ def list_decks(
         response.headers["X-Page-Size"] = str(size)
         response.headers["X-Total-Pages"] = str(total_pages)
 
-    # Build output with favourite flag
+    # Build output with favourite/liked and like_count
     out: List[DeckOut] = []
     for d in decks:
         # card_count is not explicitly computed here; left None or could be computed via len(d.cards)
@@ -240,9 +263,34 @@ def list_decks(
                 created_at=d.created_at,
                 card_count=counts.get(d.id, 0),
                 favourite=d.id in fav_ids,
+                like_count=like_counts_map.get(d.id, 0),
+                liked=d.id in liked_ids,
             )
         )
     return out
+
+
+@router.post("/{deck_id}/like", status_code=status.HTTP_204_NO_CONTENT)
+def like_deck(deck_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    # Any authenticated user can like any deck; owner can like too
+    exists = db.query(DeckLike).filter(DeckLike.user_id == current_user.id, DeckLike.deck_id == deck_id).first()
+    if not exists:
+        db.add(DeckLike(user_id=current_user.id, deck_id=deck_id))
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{deck_id}/like", status_code=status.HTTP_204_NO_CONTENT)
+def unlike_deck(deck_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    row = db.query(DeckLike).filter(DeckLike.user_id == current_user.id, DeckLike.deck_id == deck_id).first()
+    if not row:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    db.delete(row)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @router.post("/{deck_id}/favorite", status_code=status.HTTP_204_NO_CONTENT)
 def favorite_deck(deck_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):

@@ -43,12 +43,13 @@ class Card(Base):
         CheckConstraint("visibility in ('public','private')", name="ck_cards_visibility"),
     )
     id = Column(Integer, primary_key=True, index=True)
-    deck_id = Column(Integer, ForeignKey("decks.id"), nullable=False, index=True)
+    deck_id = Column(Integer, ForeignKey("decks.id"), index=True)
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
-    qtype = Column(String, nullable=False)  # mcq | match | fillups
-    options_json = Column(Text, nullable=True)  # stores MCQ options as JSON array string
-    visibility = Column(String, nullable=False, default="private")  # public | private
+    qtype = Column(String, nullable=False)
+    options_json = Column(Text, nullable=True)  # JSON-encoded options for MCQ
+    visibility = Column(String, nullable=False, default="private")
+  # public | private
 
     deck = relationship("Deck", back_populates="cards")
 
@@ -56,11 +57,27 @@ class Card(Base):
 class DeckFavorite(Base):
     __tablename__ = "deck_favorites"
     __table_args__ = (
-        UniqueConstraint("user_id", "deck_id", name="uq_fav_user_deck"),
+        UniqueConstraint("user_id", "deck_id", name="uq_deck_favorites_user_deck"),
+)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    deck_id = Column(Integer, ForeignKey("decks.id"), nullable=False, index=True)
+
+    user = relationship("User")
+    deck = relationship("Deck")
+
+
+class DeckLike(Base):
+    __tablename__ = "deck_likes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "deck_id", name="uq_deck_likes_user_deck"),
     )
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     deck_id = Column(Integer, ForeignKey("decks.id"), nullable=False, index=True)
+
+    user = relationship("User")
+    deck = relationship("Deck")
 
 Base.metadata.create_all(bind=engine)
 
