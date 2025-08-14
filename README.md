@@ -180,4 +180,4 @@ Optional (AI)
 
 - Deck search matches title, description, and tags.
 - Cards inherit deck visibility and do not expose a visibility field.
-- Some environments may show a bcrypt version warning; upgrading `bcrypt` can silence it.
+- Some environments may show a bcrypt version warning; upgrading `bcrypt` can silence it.# Quiz_app_frontend
