@@ -60,10 +60,13 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     return {"message": "User registered successfully"}
 
 
-@router.post("/login", response_model=Token)
+from fastapi import Response
+
+@router.post("/login")
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
+    response: Response = None
 ):
     user = db.query(User).filter(User.email == form_data.username).first()
 
@@ -79,11 +82,13 @@ def login(
     db.merge(user)
     db.commit()
 
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-    }
+    # Set tokens as HttpOnly cookies
+    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=True, samesite="lax")
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=True, samesite="lax")
+
+    # Only return a success message, not the tokens themselves
+    return {"message": "Login successful. Tokens set as HttpOnly cookies."}
+    # Frontend: use cookie-based authentication, do not store tokens in localStorage.
 
 
 @router.post("/refresh")

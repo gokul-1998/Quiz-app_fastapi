@@ -54,6 +54,22 @@ class Card(Base):
     deck = relationship("Deck", back_populates="cards")
 
 
+class TestSessionDB(Base):
+    __tablename__ = "test_sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, unique=True, index=True, nullable=False)
+    deck_id = Column(Integer, ForeignKey("decks.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    total_cards = Column(Integer, nullable=False)
+    correct_answers = Column(Integer, nullable=True)
+    total_time = Column(Integer, nullable=True)  # seconds
+    answers_json = Column(Text, nullable=True)  # JSON-encoded answers
+
+    user = relationship("User")
+    deck = relationship("Deck")
+
 class DeckFavorite(Base):
     __tablename__ = "deck_favorites"
     __table_args__ = (
