@@ -90,7 +90,7 @@ def test_test_routes_full_coverage(client):
     )
     assert r.status_code == 403
 
-    # submit-answer: valid card correct
+    # submit-answer: valid card correct (fillups)
     r = client.post(
         "/tests/submit-answer",
         headers=auth_headers(other_tok),
@@ -98,6 +98,14 @@ def test_test_routes_full_coverage(client):
         json={"card_id": c1, "user_answer": "A", "time_taken": 3},
     )
     assert r.status_code == 200 and r.json()["is_correct"] is True
+    # submit-answer: valid MCQ card, check options in /tests/complete
+    r2 = client.post(
+        "/tests/submit-answer",
+        headers=auth_headers(other_tok),
+        params={"session_id": sess["session_id"]},
+        json={"card_id": c2, "user_answer": "B", "time_taken": 2},
+    )
+    assert r2.status_code == 200 and r2.json()["is_correct"] is False
 
     # submit-answer: invalid card => 404
     r = client.post(
@@ -107,6 +115,30 @@ def test_test_routes_full_coverage(client):
         json={"card_id": 999999, "user_answer": "X"},
     )
     assert r.status_code == 404
+    # submit-answer: invalid session_id => 404
+    r = client.post(
+        "/tests/submit-answer",
+        headers=auth_headers(other_tok),
+        params={"session_id": "notarealsessionid"},
+        json={"card_id": c1, "user_answer": "A"},
+    )
+    assert r.status_code == 404
+    # submit-answer: invalid card_id type => 400
+    r = client.post(
+        "/tests/submit-answer",
+        headers=auth_headers(other_tok),
+        params={"session_id": sess["session_id"]},
+        json={"card_id": "bad", "user_answer": "A"},
+    )
+    assert r.status_code == 400
+    # submit-answer: invalid user_answer type => 400
+    r = client.post(
+        "/tests/submit-answer",
+        headers=auth_headers(other_tok),
+        params={"session_id": sess["session_id"]},
+        json={"card_id": c1, "user_answer": 123},
+    )
+    assert r.status_code == 400
 
     # complete: invalid session id format => 400
     bad = client.post(
@@ -131,6 +163,9 @@ def test_test_routes_full_coverage(client):
     assert ok.status_code == 200
     res = ok.json()
     assert res["total_cards"] == 2 and res["correct_answers"] == 1 and res["total_time"] == 7
+    # Check that MCQ answer has options in response
+    mcq_ans = [a for a in res["answers"] if a["card_id"] == c2][0]
+    assert mcq_ans["options"] == ["A", "B", "C", "D"]
 
     # stats endpoint (mocked data path)
     r = client.get("/tests/stats", headers=auth_headers(other_tok))

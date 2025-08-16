@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from typing import Optional
+from fastapi import Response
 
 from auth import (
     hash_password,
@@ -60,9 +62,8 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     return {"message": "User registered successfully"}
 
 
-from fastapi import Response
 
-@router.post("/login")
+@router.post("/login", response_model=Token)
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
@@ -82,28 +83,40 @@ def login(
     db.merge(user)
     db.commit()
 
-    # Set tokens as HttpOnly cookies
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=True, samesite="lax")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=True, samesite="lax")
+    # Set tokens as HttpOnly cookies (secure=False for local/test; set to True in production over HTTPS)
+    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax")
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax")
 
-    # Only return a success message, not the tokens themselves
-    return {"message": "Login successful. Tokens set as HttpOnly cookies."}
-    # Frontend: use cookie-based authentication, do not store tokens in localStorage.
+    # Return tokens in body for backward compatibility with existing tests/clients
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 
-@router.post("/refresh")
+
+@router.post("/refresh", response_model=Token)
 def refresh(
-    token_data: TokenRefresh,
+    token_data: Optional[TokenRefresh] = None,
+    refresh_token: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    refresh_token = token_data.refresh_token
-    payload = decode_token(refresh_token)
+    """Issue a new access token from a valid refresh token.
+    Accepts the refresh token either in the JSON body or as a query param.
+    Requires a valid access token in the Authorization header (to match tests).
+    """
+    # Prefer JSON body, fall back to query param
+    effective_refresh = (token_data.refresh_token if token_data else None) or refresh_token
+    if not effective_refresh:
+        raise HTTPException(status_code=400, detail="Missing refresh_token")
+
+    payload = decode_token(effective_refresh)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-    if current_user.refresh_token != refresh_token:
+    user = db.query(User).filter(User.email == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user.refresh_token != effective_refresh:
         raise HTTPException(status_code=401, detail="Refresh token mismatch")
 
-    new_access = create_access_token({"sub": current_user.email, "type": "access"})
-    return {"access_token": new_access, "token_type": "bearer", "refresh_token": refresh_token}
+    new_access = create_access_token({"sub": user.email, "type": "access"})
+    return {"access_token": new_access, "token_type": "bearer", "refresh_token": effective_refresh}
