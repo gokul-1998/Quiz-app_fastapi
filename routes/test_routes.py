@@ -1,8 +1,9 @@
 from typing import List, Optional, Dict, Any
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from sqlalchemy import func
 from datetime import datetime, timedelta
 import uuid
@@ -11,6 +12,9 @@ from db import get_db, Deck, Card, User, TestSessionDB
 from routes.auth_routes import get_current_user
 
 router = APIRouter(prefix="/tests", tags=["testing"])
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 # ----- Test Session Models -----
 
@@ -59,6 +63,24 @@ class TestStats(BaseModel):
     average_accuracy: float
     favorite_subjects: List[str]
     recent_tests: List[Dict[str, Any]]
+
+
+class TestSessionSummary(BaseModel):
+    session_id: str
+    deck_id: int
+    deck_title: str
+    total_cards: int
+    correct_answers: int
+    accuracy: float
+    total_time: Optional[int] = None
+    completed_at: datetime
+
+
+class TestHistoryResponse(BaseModel):
+    items: List[TestSessionSummary]
+    total: int
+    page: int
+    size: int
 
 # ----- Test Session Endpoints -----
 
@@ -167,6 +189,68 @@ def validate_session_id(session_id: str, db: Session, current_user) -> "TestSess
     if test_session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Session does not belong to current user")
     return test_session
+
+
+def _load_deck_and_owner(db: Session, deck_id: int):
+    """Load (Deck, User) tuple with JOIN, raising HTTPException appropriately."""
+    try:
+        deck_user = (
+            db.query(Deck, User)
+            .join(User, Deck.owner_id == User.id)
+            .filter(Deck.id == deck_id)
+            .first()
+        )
+    except OperationalError as exc:
+        logger.exception("OperationalError while fetching deck and owner", extra={
+            "deck_id": deck_id,
+            "exc": str(exc),
+        })
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable")
+    except SQLAlchemyError as exc:
+        logger.exception("SQLAlchemyError while fetching deck and owner", extra={
+            "deck_id": deck_id,
+            "exc": str(exc),
+        })
+        raise HTTPException(status_code=500, detail="Database error")
+    if not deck_user:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    return deck_user
+
+
+def _parse_answers(raw_json: Optional[str], session_id: str) -> List[TestAnswer]:
+    """Parse answers_json to a validated list of TestAnswer objects.
+    Returns an empty list on parse/validation failures but logs details.
+    """
+    text = raw_json or "[]"
+    try:
+        data = json.loads(text)
+        if not isinstance(data, list):
+            raise ValueError("answers_json must be a JSON list")
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.error("Failed to parse answers_json", extra={
+            "session_id": session_id,
+            "error": str(exc),
+            "raw_json_len": len(text),
+        })
+        return []
+
+    out: List[TestAnswer] = []
+    for idx, a in enumerate(data):
+        try:
+            out.append(TestAnswer(**{
+                "card_id": a.get("card_id"),
+                "user_answer": a.get("user_answer", ""),
+                "is_correct": a.get("is_correct", False),
+                "time_taken": a.get("time_taken"),
+            }))
+        except ValidationError as ve:
+            logger.error("Invalid answer entry", extra={
+                "session_id": session_id,
+                "index": idx,
+                "error": str(ve),
+            })
+            continue
+    return out
 
 
 @router.post("/submit-answer")
@@ -408,35 +492,11 @@ def get_test_results(
     if not test_session.completed_at:
         raise HTTPException(status_code=400, detail="Test session not completed yet")
 
-    # Load deck and owner
-    try:
-        deck = db.query(Deck).filter(Deck.id == test_session.deck_id).first()
-    except SQLAlchemyError as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(exc)}")
-    if not deck:
-        raise HTTPException(status_code=404, detail="Deck not found")
-    try:
-        deck_owner = db.query(User).filter(User.id == deck.owner_id).first()
-    except SQLAlchemyError as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(exc)}")
+    # Load deck and owner using a JOIN
+    deck, deck_owner = _load_deck_and_owner(db, test_session.deck_id)
 
     # Parse answers
-    answers_raw = []
-    if getattr(test_session, "answers_json", None):
-        try:
-            answers_raw = json.loads(test_session.answers_json)
-        except Exception:
-            answers_raw = []
-
-    answer_details: List[TestAnswer] = []
-    for a in answers_raw:
-        # options may or may not be present; keep as-is
-        answer_details.append(TestAnswer(
-            card_id=a.get("card_id"),
-            user_answer=a.get("user_answer", ""),
-            is_correct=a.get("is_correct", False),
-            time_taken=a.get("time_taken")
-        ))
+    answer_details: List[TestAnswer] = _parse_answers(getattr(test_session, "answers_json", None), session_id)
 
     total_cards = len(answer_details)
     correct_answers = test_session.correct_answers if test_session.correct_answers is not None else sum(1 for ans in answer_details if ans.is_correct)
@@ -455,3 +515,68 @@ def get_test_results(
         completed_at=completed_at,
         answers=answer_details
     )
+
+
+@router.get("/history", response_model=TestHistoryResponse)
+def get_test_history(
+    page: int = 1,
+    size: int = 20,
+    deck_id: Optional[int] = None,
+    only_completed: bool = True,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Return paginated history of the current user's test sessions.
+    Optionally filter by deck. Defaults to only completed sessions.
+    """
+    if page < 1 or size < 1 or size > 100:
+        raise HTTPException(status_code=400, detail="Invalid pagination params")
+
+    q = (
+        db.query(TestSessionDB, Deck)
+        .join(Deck, TestSessionDB.deck_id == Deck.id)
+        .filter(TestSessionDB.user_id == current_user.id)
+    )
+    if only_completed:
+        q = q.filter(TestSessionDB.completed_at.isnot(None))
+    if deck_id is not None:
+        q = q.filter(TestSessionDB.deck_id == deck_id)
+
+    try:
+        total = q.count()
+        rows = (
+            q.order_by(TestSessionDB.completed_at.desc().nullslast(), TestSessionDB.started_at.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+            .all()
+        )
+    except (OperationalError, SQLAlchemyError):
+        logger.exception("Database error fetching test history", extra={"user_id": getattr(current_user, "id", None)})
+        raise HTTPException(status_code=500, detail="Database error")
+
+    items: List[TestSessionSummary] = []
+    for sess, deck in rows:
+        try:
+            total_cards = int(sess.total_cards or 0)
+            correct = int(sess.correct_answers or 0)
+            accuracy = round(((correct / total_cards) * 100) if total_cards else 0.0, 2)
+            completed_at = sess.completed_at or sess.started_at
+            items.append(TestSessionSummary(
+                session_id=sess.session_id,
+                deck_id=deck.id,
+                deck_title=deck.title,
+                total_cards=total_cards,
+                correct_answers=correct,
+                accuracy=accuracy,
+                total_time=sess.total_time,
+                completed_at=completed_at,
+            ))
+        except Exception as exc:
+            logger.error("Failed to build history item", extra={
+                "user_id": getattr(current_user, "id", None),
+                "session_id": getattr(sess, "session_id", None),
+                "error": str(exc),
+            })
+            continue
+
+    return TestHistoryResponse(items=items, total=total, page=page, size=size)
