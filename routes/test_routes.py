@@ -390,3 +390,68 @@ def get_random_public_deck(
         "card_count": card_count,
         "created_at": deck.created_at
     }
+
+
+@router.get("/results", response_model=TestSessionResult)
+def get_test_results(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Fetch a completed test session's results by session_id.
+    Returns the same shape as /tests/complete for easy frontend consumption.
+    """
+    # Validate session ownership and existence
+    test_session = validate_session_id(session_id, db, current_user)
+
+    # Ensure session is completed
+    if not test_session.completed_at:
+        raise HTTPException(status_code=400, detail="Test session not completed yet")
+
+    # Load deck and owner
+    try:
+        deck = db.query(Deck).filter(Deck.id == test_session.deck_id).first()
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(exc)}")
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    try:
+        deck_owner = db.query(User).filter(User.id == deck.owner_id).first()
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(exc)}")
+
+    # Parse answers
+    answers_raw = []
+    if getattr(test_session, "answers_json", None):
+        try:
+            answers_raw = json.loads(test_session.answers_json)
+        except Exception:
+            answers_raw = []
+
+    answer_details: List[TestAnswer] = []
+    for a in answers_raw:
+        # options may or may not be present; keep as-is
+        answer_details.append(TestAnswer(
+            card_id=a.get("card_id"),
+            user_answer=a.get("user_answer", ""),
+            is_correct=a.get("is_correct", False),
+            time_taken=a.get("time_taken")
+        ))
+
+    total_cards = len(answer_details)
+    correct_answers = test_session.correct_answers if test_session.correct_answers is not None else sum(1 for ans in answer_details if ans.is_correct)
+    accuracy = round(((correct_answers / total_cards) * 100) if total_cards else 0.0, 2)
+    total_time = test_session.total_time
+    completed_at = test_session.completed_at
+
+    return TestSessionResult(
+        session_id=session_id,
+        deck_title=deck.title,
+        deck_owner=deck_owner.email if deck_owner else "",
+        total_cards=total_cards,
+        correct_answers=correct_answers,
+        accuracy=accuracy,
+        total_time=total_time,
+        completed_at=completed_at,
+        answers=answer_details
+    )
