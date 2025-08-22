@@ -81,16 +81,39 @@ class CardCreateFillups(CardBase):
         )
 
 
+class MatchPair(BaseModel):
+    left: str
+    right: str
+
+
 class CardCreateMatch(CardBase):
     qtype: Literal["match"]
+    pairs: List[MatchPair]
+
+    @field_validator("pairs")
+    @classmethod
+    def validate_pairs(cls, v: List[MatchPair]):
+        if not isinstance(v, list) or len(v) != 4:
+            raise ValueError("For match, exactly 4 pairs are required")
+        for p in v:
+            if not p.left or not p.right:
+                raise ValueError("Each match pair must have non-empty 'left' and 'right'")
+        return v
+
     if ConfigDict:
         model_config = ConfigDict(
             json_schema_extra={
                 "examples": [
                     {
                         "qtype": "match",
-                        "question": "Match country to capital: FR=?",
-                        "answer": "FR=Paris",
+                        "question": "Match countries to capitals",
+                        "answer": "",
+                        "pairs": [
+                            {"left": "France", "right": "Paris"},
+                            {"left": "Japan", "right": "Tokyo"},
+                            {"left": "India", "right": "New Delhi"},
+                            {"left": "USA", "right": "Washington, D.C."}
+                        ]
                     }
                 ]
             }
@@ -106,7 +129,9 @@ class CardOut(BaseModel):
     question: str
     answer: str
     qtype: Literal["mcq", "match", "fillups"]
-    options: Optional[List[str]] = None
+    # For mcq: List[str]
+    # For match: List[{"left": str, "right": str}] (shuffled order)
+    options: Optional[List] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -133,6 +158,57 @@ class DeckOut(DeckBase):
 
 
 # ----- Deck CRUD -----
+
+@router.get("/my", response_model=List[DeckOut])
+def list_my_decks(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """Return all decks (public and private) owned by the current user."""
+    decks = db.query(Deck).filter(Deck.owner_id == current_user.id).order_by(Deck.created_at.desc()).all()
+    out = []
+    for d in decks:
+        card_count = db.query(Card).filter(Card.deck_id == d.id).count()
+        out.append(DeckOut(
+            id=d.id,
+            title=d.title,
+            description=d.description,
+            tags=d.tags,
+            visibility=d.visibility,
+            owner_id=d.owner_id,
+            created_at=d.created_at,
+            card_count=card_count,
+            favourite=False,
+            like_count=0,
+            liked=False
+        ))
+    return out
+
+@router.get("/public", response_model=List[DeckOut])
+def list_all_public_decks(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """Return all public decks from all users."""
+    decks = db.query(Deck).filter(Deck.visibility == "public").order_by(Deck.created_at.desc()).all()
+    out = []
+    for d in decks:
+        card_count = db.query(Card).filter(Card.deck_id == d.id).count()
+        out.append(DeckOut(
+            id=d.id,
+            title=d.title,
+            description=d.description,
+            tags=d.tags,
+            visibility=d.visibility,
+            owner_id=d.owner_id,
+            created_at=d.created_at,
+            card_count=card_count,
+            favourite=False,
+            like_count=0,
+            liked=False
+        ))
+    return out
+
 @router.post("/", response_model=DeckOut, status_code=status.HTTP_201_CREATED)
 def create_deck(payload: DeckCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Create a new deck with optional tags and visibility."""
@@ -153,22 +229,40 @@ def create_deck(payload: DeckCreate, db: Session = Depends(get_db), current_user
 def list_decks(
     search: str | None = None,
     tag: str | None = None,
-    visibility: Literal["public", "private", "all"] = "all",
     page: int = 1,
     size: int = 10,
     response: Response = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    """List decks with optional search, tag filtering, and visibility controls."""
-    # Base deck query
-    query = db.query(Deck)
-    
-    # Show own decks and public decks (no admin override)
-    query = query.filter(
-        (Deck.owner_id == current_user.id) |
-        (Deck.visibility == "public")
+    """List all public decks from all users, plus all private decks owned by the current user. Does not return private decks of other users."""
+    query = db.query(Deck).filter(
+        (Deck.visibility == "public") |
+        ((Deck.visibility == "private") & (Deck.owner_id == current_user.id))
     )
+    if search:
+        query = query.filter(Deck.title.ilike(f"%{search}%"))
+    if tag:
+        query = query.filter(Deck.tags.ilike(f"%{tag}%"))
+    decks = query.order_by(Deck.created_at.desc()).offset((page-1)*size).limit(size).all()
+    out = []
+    for d in decks:
+        card_count = db.query(Card).filter(Card.deck_id == d.id).count()
+        out.append(DeckOut(
+            id=d.id,
+            title=d.title,
+            description=d.description,
+            tags=d.tags,
+            visibility=d.visibility,
+            owner_id=d.owner_id,
+            created_at=d.created_at,
+            card_count=card_count,
+            favourite=False,
+            like_count=0,
+            liked=False
+        ))
+    return out
+
     
     # Apply search across title, description, and tags
     if search:
@@ -365,8 +459,13 @@ def add_card(deck_id: int, payload: CardCreate, db: Session = Depends(get_db), c
         raise HTTPException(status_code=404, detail="Deck not found")
     if deck.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to add cards to this deck")
-    # persist options for MCQ as JSON
-    options_json = json.dumps(payload.options) if isinstance(payload, CardCreateMCQ) else None
+    # persist options for MCQ or MATCH as JSON
+    options_json = None
+    if isinstance(payload, CardCreateMCQ):
+        options_json = json.dumps(payload.options)
+    elif isinstance(payload, CardCreateMatch):
+        # store as list of {left,right}
+        options_json = json.dumps([p.dict() for p in payload.pairs])
     card = Card(
         deck_id=deck.id,
         question=payload.question,
@@ -379,12 +478,17 @@ def add_card(deck_id: int, payload: CardCreate, db: Session = Depends(get_db), c
     db.commit()
     db.refresh(card)
     # build response with decoded options if present
+    # Build response; shuffle order for match
+    opts = json.loads(card.options_json) if card.options_json else None
+    if card.qtype == "match" and isinstance(opts, list):
+        import random
+        random.shuffle(opts)
     return CardOut(
         id=card.id,
         question=card.question,
         answer=card.answer,
         qtype=card.qtype,  # already a string literal value
-        options=json.loads(card.options_json) if card.options_json else None,
+        options=opts,
     )
 
 
@@ -401,13 +505,17 @@ def list_cards(deck_id: int, db: Session = Depends(get_db), current_user=Depends
     cards = db.query(Card).filter(Card.deck_id == deck.id).all()
     out: List[CardOut] = []
     for c in cards:
+        opts = json.loads(c.options_json) if c.options_json else None
+        if c.qtype == "match" and isinstance(opts, list):
+            import random
+            random.shuffle(opts)
         out.append(
             CardOut(
                 id=c.id,
                 question=c.question,
                 answer=c.answer,
                 qtype=c.qtype,
-                options=json.loads(c.options_json) if c.options_json else None,
+                options=opts,
             )
         )
     return out
@@ -424,12 +532,16 @@ def get_card(deck_id: int, card_id: int, db: Session = Depends(get_db), current_
     is_owner = deck.owner_id == current_user.id
     if not is_owner and deck.visibility != "public":
         raise HTTPException(status_code=403, detail="Not authorized to view this card")
+    opts = json.loads(card.options_json) if card.options_json else None
+    if card.qtype == "match" and isinstance(opts, list):
+        import random
+        random.shuffle(opts)
     return CardOut(
         id=card.id,
         question=card.question,
         answer=card.answer,
         qtype=card.qtype,
-        options=json.loads(card.options_json) if card.options_json else None,
+        options=opts,
     )
 
 
@@ -451,8 +563,8 @@ def update_card(
     data = payload.dict(exclude_unset=True)
     # Handle qtype/options together
     new_qtype = data.get("qtype", card.qtype)
-    if "options" in data and (new_qtype != "mcq"):
-        raise HTTPException(status_code=400, detail="Options are only valid for mcq cards")
+    if "options" in data and (new_qtype not in ("mcq", "match")):
+        raise HTTPException(status_code=400, detail="Options are only valid for mcq or match cards")
     if new_qtype == "mcq":
         opts = data.get("options")
         if opts is not None:
@@ -463,8 +575,20 @@ def update_card(
         # If switching to mcq and no options provided, keep existing if present; else error
         if card.options_json is None and opts is None:
             raise HTTPException(status_code=400, detail="mcq requires 'options' with at least 4 items")
+    elif new_qtype == "match":
+        opts = data.get("options")
+        if opts is not None:
+            # Expect exactly 4 pairs of {left,right}
+            if not isinstance(opts, list) or len(opts) != 4:
+                raise HTTPException(status_code=400, detail="For match, exactly 4 pairs are required in 'options'")
+            for p in opts:
+                if not isinstance(p, dict) or not p.get("left") or not p.get("right"):
+                    raise HTTPException(status_code=400, detail="Each match pair must be an object with non-empty 'left' and 'right'")
+            card.options_json = json.dumps(opts)
+        if card.options_json is None and opts is None:
+            raise HTTPException(status_code=400, detail="match requires 'options' as exactly 4 pairs")
     else:
-        # Non-mcq cards should not keep options
+        # Non-mcq/match cards should not keep options
         card.options_json = None
 
     # Update simple fields

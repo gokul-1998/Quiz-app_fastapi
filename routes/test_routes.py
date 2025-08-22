@@ -57,30 +57,13 @@ class TestSessionResult(BaseModel):
     completed_at: datetime
     answers: List[TestAnswer]
 
-class TestStats(BaseModel):
-    total_tests_taken: int
-    total_decks_tested: int
-    average_accuracy: float
-    favorite_subjects: List[str]
-    recent_tests: List[Dict[str, Any]]
 
+class TestResultSummary(BaseModel):
+    total_questions: int
+    correct_count: int
+    mistake_count: int
+    score_percent: float
 
-class TestSessionSummary(BaseModel):
-    session_id: str
-    deck_id: int
-    deck_title: str
-    total_cards: int
-    correct_answers: int
-    accuracy: float
-    total_time: Optional[int] = None
-    completed_at: datetime
-
-
-class TestHistoryResponse(BaseModel):
-    items: List[TestSessionSummary]
-    total: int
-    page: int
-    size: int
 
 # ----- Test Session Endpoints -----
 
@@ -407,22 +390,6 @@ def complete_test_session(
     )
 
 
-@router.get("/stats", response_model=TestStats)
-def get_test_stats(
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
-):
-    """Get testing statistics for the current user."""
-    # In a real app, you'd query from a TestSession table
-    # For now, return mock data showing the concept
-    
-    return TestStats(
-        total_tests_taken=0,  # Would be actual count from database
-        total_decks_tested=0,
-        average_accuracy=0.0,
-        favorite_subjects=[],
-        recent_tests=[]
-    )
 
 @router.get("/leaderboard")
 def get_test_leaderboard(
@@ -441,7 +408,7 @@ def get_test_leaderboard(
         "limit": limit
     }
 
-@router.get("/random-deck")
+@router.get("/random-deck", include_in_schema=False)
 def get_random_public_deck(
     subject: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -476,7 +443,7 @@ def get_random_public_deck(
     }
 
 
-@router.get("/results", response_model=TestSessionResult)
+@router.get("/results", response_model=TestSessionResult, include_in_schema=False)
 def get_test_results(
     session_id: str,
     db: Session = Depends(get_db),
@@ -517,66 +484,30 @@ def get_test_results(
     )
 
 
-@router.get("/history", response_model=TestHistoryResponse)
-def get_test_history(
-    page: int = 1,
-    size: int = 20,
-    deck_id: Optional[int] = None,
-    only_completed: bool = True,
+@router.get("/result-summary", response_model=TestResultSummary)
+def get_test_result_summary(
+    session_id: str,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    """Return paginated history of the current user's test sessions.
-    Optionally filter by deck. Defaults to only completed sessions.
-    """
-    if page < 1 or size < 1 or size > 100:
-        raise HTTPException(status_code=400, detail="Invalid pagination params")
+    """Single summary API: returns counts and score in percent for a completed test session."""
+    test_session = validate_session_id(session_id, db, current_user)
 
-    q = (
-        db.query(TestSessionDB, Deck)
-        .join(Deck, TestSessionDB.deck_id == Deck.id)
-        .filter(TestSessionDB.user_id == current_user.id)
+    if not test_session.completed_at:
+        raise HTTPException(status_code=400, detail="Test session not completed yet")
+
+    # Parse answers
+    answers: List[TestAnswer] = _parse_answers(getattr(test_session, "answers_json", None), session_id)
+    total = len(answers)
+    correct = test_session.correct_answers if test_session.correct_answers is not None else sum(1 for a in answers if a.is_correct)
+    mistakes = max(total - correct, 0)
+    score = round(((correct / total) * 100) if total else 0.0, 2)
+
+    return TestResultSummary(
+        total_questions=total,
+        correct_count=correct,
+        mistake_count=mistakes,
+        score_percent=score,
     )
-    if only_completed:
-        q = q.filter(TestSessionDB.completed_at.isnot(None))
-    if deck_id is not None:
-        q = q.filter(TestSessionDB.deck_id == deck_id)
 
-    try:
-        total = q.count()
-        rows = (
-            q.order_by(TestSessionDB.completed_at.desc().nullslast(), TestSessionDB.started_at.desc())
-            .offset((page - 1) * size)
-            .limit(size)
-            .all()
-        )
-    except (OperationalError, SQLAlchemyError):
-        logger.exception("Database error fetching test history", extra={"user_id": getattr(current_user, "id", None)})
-        raise HTTPException(status_code=500, detail="Database error")
 
-    items: List[TestSessionSummary] = []
-    for sess, deck in rows:
-        try:
-            total_cards = int(sess.total_cards or 0)
-            correct = int(sess.correct_answers or 0)
-            accuracy = round(((correct / total_cards) * 100) if total_cards else 0.0, 2)
-            completed_at = sess.completed_at or sess.started_at
-            items.append(TestSessionSummary(
-                session_id=sess.session_id,
-                deck_id=deck.id,
-                deck_title=deck.title,
-                total_cards=total_cards,
-                correct_answers=correct,
-                accuracy=accuracy,
-                total_time=sess.total_time,
-                completed_at=completed_at,
-            ))
-        except Exception as exc:
-            logger.error("Failed to build history item", extra={
-                "user_id": getattr(current_user, "id", None),
-                "session_id": getattr(sess, "session_id", None),
-                "error": str(exc),
-            })
-            continue
-
-    return TestHistoryResponse(items=items, total=total, page=page, size=size)

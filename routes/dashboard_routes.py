@@ -137,7 +137,7 @@ def get_dashboard(
         }
     }
 
-@router.get("/discover")
+@router.get("/discover", include_in_schema=False)
 def discover_decks(
     subject: Optional[str] = None,
     difficulty: Optional[str] = None,
@@ -192,7 +192,7 @@ def discover_decks(
         }
     }
 
-@router.get("/subjects")
+@router.get("/subjects", include_in_schema=False)
 def get_available_subjects(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
@@ -216,7 +216,7 @@ def get_available_subjects(
         "total_subjects": len(all_subjects)
     }
 
-@router.get("/quick-test")
+@router.get("/quick-test", include_in_schema=False)
 def get_quick_test_options(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
