@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
-from fastapi import Response
+from fastapi import Response, Request
 
 from auth import (
     hash_password,
@@ -83,7 +83,8 @@ def login(
     db.merge(user)
     db.commit()
 
-    # Set tokens as HttpOnly cookies (secure=False for local/test; set to True in production over HTTPS)
+    # Set tokens as HttpOnly SESSION cookies (no max-age/expires) so they are cleared on browser close.
+    # NOTE: Set secure=True in production (HTTPS) and adjust samesite as needed.
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax")
 
@@ -94,17 +95,19 @@ def login(
 
 @router.post("/refresh", response_model=Token)
 def refresh(
+    request: Request,
+    response: Response,
     token_data: Optional[TokenRefresh] = None,
     refresh_token: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Issue a new access token from a valid refresh token.
-    Accepts the refresh token either in the JSON body or as a query param.
-    Requires a valid access token in the Authorization header (to match tests).
+    - Reads refresh token from HttpOnly cookie by default.
+    - Falls back to JSON body or query param for compatibility.
+    - Does NOT require a valid access token (works when access is expired).
     """
-    # Prefer JSON body, fall back to query param
-    effective_refresh = (token_data.refresh_token if token_data else None) or refresh_token
+    cookie_refresh = request.cookies.get("refresh_token")
+    effective_refresh = cookie_refresh or (token_data.refresh_token if token_data else None) or refresh_token
     if not effective_refresh:
         raise HTTPException(status_code=400, detail="Missing refresh_token")
 
@@ -119,4 +122,27 @@ def refresh(
         raise HTTPException(status_code=401, detail="Refresh token mismatch")
 
     new_access = create_access_token({"sub": user.email, "type": "access"})
+    # Refresh token is per-login; keep it stable until logout/login (no rotation here).
+    response.set_cookie(key="access_token", value=new_access, httponly=True, secure=False, samesite="lax")
     return {"access_token": new_access, "token_type": "bearer", "refresh_token": effective_refresh}
+
+
+@router.post("/logout")
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Invalidate current session by revoking stored refresh token and clearing cookies.
+    If a valid refresh token cookie exists and matches a user, revoke it; otherwise just clear cookies.
+    """
+    refresh_cookie = request.cookies.get("refresh_token")
+    if refresh_cookie:
+        payload = decode_token(refresh_cookie)
+        if payload and payload.get("type") == "refresh":
+            user = db.query(User).filter(User.email == payload.get("sub")).first()
+            if user and user.refresh_token == refresh_cookie:
+                user.refresh_token = None
+                db.merge(user)
+                db.commit()
+
+    # Clear cookies by setting empty value and Max-Age=0
+    response.delete_cookie("access_token")
+    response.delete_cookie("refresh_token")
+    return {"message": "Logged out"}
