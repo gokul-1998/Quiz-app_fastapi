@@ -4,11 +4,8 @@ sqlalchemy
 python-dotenv
 passlib[bcrypt]
 python-jose[cryptography]
-pytest
-pytest-cov
 httpx
 python-multipart
-locust
 psycopg2-binary>=2.9.10
 google-generativeai>=0.8.5
 python-dateutil>=2.9.0.post0

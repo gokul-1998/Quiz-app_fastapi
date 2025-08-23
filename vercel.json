@@ -24,5 +24,12 @@
     ],
     "rewrites": [
       { "source": "/(.*)", "destination": "main.py" }
-    ]
+    ],
+    "excludeFiles": {
+      "static/uploads/**": true, 
+      "tests/**": true,          
+      "scripts/**": true,        
+      "*.db": true,              
+      "*.lock": true             
+    }
   }
