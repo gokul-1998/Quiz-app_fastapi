@@ -1,0 +1,5 @@
+static/uploads/
+tests/
+scripts/
+*.db
+*.lock
