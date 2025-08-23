@@ -20,6 +20,7 @@ router = APIRouter(prefix="/ai", tags=["AI"])
 class AIGenerateRequest(BaseModel):
     prompt: str = Field(..., example="Explain photosynthesis")
     desired_qtype: Literal["mcq", "fillups", "match"] = Field(..., example="mcq")
+    count: int = Field(1, gt=0, le=20, example=5)
 
 
 def _generate_with_gemini(prompt: str, qtype: str) -> tuple[str, str, list[str] | None]:
@@ -83,28 +84,38 @@ def _generate_with_gemini(prompt: str, qtype: str) -> tuple[str, str, list[str] 
             detail=f"Failed to generate content: {str(e)}"
         )
 
-@router.post("/generate-card", response_model=AIQuestion)
-async def generate_card(req: AIGenerateRequest):
-    """Generate a flashcard using Gemini AI based on the given prompt and question type."""
+from fastapi import Body
+from typing import List
+
+@router.post("/generate-card", response_model=List[AIQuestion])
+async def generate_card(req: AIGenerateRequest = Body(...)):
+    """Generate one or more flashcards using Gemini AI based on the given prompt and question type."""
     try:
-        question, answer, options = _generate_with_gemini(req.prompt, req.desired_qtype)
-        
-        if req.desired_qtype == "mcq":
-            if not options or len(options) < 4:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to generate enough options for MCQ"
-                )
-            return AIQuestion(question=question, answer=answer, qtype="mcq", options=options)
-        elif req.desired_qtype == "fillups":
-            return AIQuestion(question=question, answer=answer, qtype="fillups")
-        else:  # match
-            return AIQuestion(question=question, answer=answer, qtype="match")
-            
+        seen = set()
+        cards = []
+        attempts = 0
+        max_attempts = req.count * 3  # Avoid infinite loops if model repeats
+        while len(cards) < req.count and attempts < max_attempts:
+            question, answer, options = _generate_with_gemini(req.prompt, req.desired_qtype)
+            key = (question.strip().lower(), answer.strip().lower())
+            if key not in seen:
+                seen.add(key)
+                if req.desired_qtype == "mcq":
+                    if not options or len(options) < 4:
+                        continue  # skip invalid MCQ
+                    cards.append(AIQuestion(question=question, answer=answer, qtype="mcq", options=options))
+                elif req.desired_qtype == "fillups":
+                    cards.append(AIQuestion(question=question, answer=answer, qtype="fillups"))
+                else:  # match
+                    cards.append(AIQuestion(question=question, answer=answer, qtype="match"))
+            attempts += 1
+        if not cards:
+            raise HTTPException(status_code=500, detail="Failed to generate any unique cards.")
+        return cards
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating card: {str(e)}"
+            detail=f"Error generating card(s): {str(e)}"
         )
 
 

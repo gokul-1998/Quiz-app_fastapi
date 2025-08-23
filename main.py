@@ -9,7 +9,6 @@ from routes.decks_routes import router as decks_router
 from routes.ai_routes import router as ai_router
 from routes.test_routes import router as test_router
 from routes.dashboard_routes import router as dashboard_router
-from routes.media_routes import router as media_router
 
 load_dotenv()
 
@@ -29,7 +28,6 @@ app.include_router(decks_router)
 app.include_router(ai_router)
 app.include_router(test_router)
 app.include_router(dashboard_router)
-app.include_router(media_router)
 
 # Serve static uploaded files
 app.mount("/static", StaticFiles(directory="static"), name="static")
