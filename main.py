@@ -14,6 +14,10 @@ load_dotenv()
 
 app = FastAPI()
 
+@app.get("/")
+def root():
+    return "Hello World"
+    
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
