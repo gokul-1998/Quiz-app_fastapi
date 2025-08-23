@@ -5,7 +5,7 @@
         "src": "main.py",
         "use": "@vercel/python",
         "config": {
-          "runtime": "python3.10",
+          "runtime": "python3.11",
           "installCommand": "pip install --upgrade pip && pip install -r requirements.txt",
           "maxLambdaSize": "50mb"
         }
@@ -25,4 +25,4 @@
     "rewrites": [
       { "source": "/(.*)", "destination": "main.py" }
     ]
-}  
+  }
