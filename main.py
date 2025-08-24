@@ -9,6 +9,7 @@ from routes.decks_routes import router as decks_router
 from routes.ai_routes import router as ai_router
 from routes.test_routes import router as test_router
 from routes.dashboard_routes import router as dashboard_router
+import uvicorn
 
 load_dotenv()
 
