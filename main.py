@@ -17,7 +17,7 @@ app = FastAPI()
 @app.get("/")
 def root():
     return "Hello World"
-    
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +34,7 @@ app.include_router(test_router)
 app.include_router(dashboard_router)
 
 # Serve static uploaded files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     uvicorn.run(
