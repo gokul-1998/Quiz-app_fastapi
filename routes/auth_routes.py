@@ -127,6 +127,15 @@ def refresh(
     return {"access_token": new_access, "token_type": "bearer", "refresh_token": effective_refresh}
 
 
+@router.get("/me")
+def get_current_user_info(current_user: User = Depends(get_current_user)):
+    """Get current authenticated user information."""
+    return {
+        "id": current_user.id,
+        "email": current_user.email
+    }
+
+
 @router.post("/logout")
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
     """Invalidate current session by revoking stored refresh token and clearing cookies.

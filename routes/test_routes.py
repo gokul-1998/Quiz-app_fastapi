@@ -484,6 +484,70 @@ def get_test_results(
     )
 
 
+@router.get("/stats")
+def get_user_test_stats(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get user's test statistics and performance metrics."""
+    try:
+        # Get all completed test sessions for the user
+        completed_sessions = db.query(TestSessionDB).filter(
+            TestSessionDB.user_id == current_user.id,
+            TestSessionDB.completed_at.isnot(None)
+        ).all()
+        
+        if not completed_sessions:
+            return {
+                "total_tests": 0,
+                "total_questions": 0,
+                "correct_answers": 0,
+                "accuracy": 0.0,
+                "average_time": 0,
+                "recent_tests": []
+            }
+        
+        # Calculate overall statistics
+        total_tests = len(completed_sessions)
+        total_questions = sum(session.total_cards for session in completed_sessions)
+        total_correct = sum(session.correct_answers or 0 for session in completed_sessions)
+        overall_accuracy = round((total_correct / total_questions * 100) if total_questions > 0 else 0, 2)
+        
+        # Calculate average time (only for sessions with time data)
+        sessions_with_time = [s for s in completed_sessions if s.total_time is not None]
+        average_time = round(sum(s.total_time for s in sessions_with_time) / len(sessions_with_time)) if sessions_with_time else 0
+        
+        # Get recent test results (last 5)
+        recent_sessions = sorted(completed_sessions, key=lambda x: x.completed_at, reverse=True)[:5]
+        recent_tests = []
+        
+        for session in recent_sessions:
+            deck = db.query(Deck).filter(Deck.id == session.deck_id).first()
+            accuracy = round((session.correct_answers / session.total_cards * 100) if session.total_cards > 0 else 0, 2)
+            
+            recent_tests.append({
+                "session_id": session.session_id,
+                "deck_title": deck.title if deck else "Unknown Deck",
+                "completed_at": session.completed_at.isoformat(),
+                "total_cards": session.total_cards,
+                "correct_answers": session.correct_answers or 0,
+                "accuracy": accuracy,
+                "total_time": session.total_time
+            })
+        
+        return {
+            "total_tests": total_tests,
+            "total_questions": total_questions,
+            "correct_answers": total_correct,
+            "accuracy": overall_accuracy,
+            "average_time": average_time,
+            "recent_tests": recent_tests
+        }
+        
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
 @router.get("/result-summary", response_model=TestResultSummary)
 def get_test_result_summary(
     session_id: str,
