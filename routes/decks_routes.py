@@ -31,6 +31,8 @@ class DeckCreate(DeckBase):
 class DeckUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    tags: Optional[str] = None
+    visibility: Optional[Literal["public", "private"]] = None
 
 
 class CardBase(BaseModel):
